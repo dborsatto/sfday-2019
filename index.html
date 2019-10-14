@@ -1,0 +1,401 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>Master-slave and sharding with Doctrine, together at last</title>
+
+		<link rel="stylesheet" href="css/reset.css">
+		<link rel="stylesheet" href="css/reveal.css">
+		<link rel="stylesheet" href="css/theme/sky.css">
+
+		<!-- Theme used for syntax highlighting of code -->
+		<link rel="stylesheet" href="lib/css/monokai.css">
+
+		<!-- Printing and PDF exports -->
+		<script>
+			var link = document.createElement( 'link' );
+			link.rel = 'stylesheet';
+			link.type = 'text/css';
+			link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+			document.getElementsByTagName( 'head' )[0].appendChild( link );
+		</script>
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+				<section data-markdown>
+					## Master-slave and sharding with Doctrine, together at last
+
+					#### Davide Borsatto, sfday 2019
+				</section>
+				<section data-markdown>
+					### About me
+
+					* PHP developer since 2007
+					* Worked on all major versions of Symfony, starting from 1.0
+					* Will add missing `@throws` annotations to your code
+				</section>
+				<section data-markdown>
+					### About Madisoft
+
+					* We work remotely!
+					* We work full time on a Symfony project
+					* [We're hiring](https://labs.madisoft.it/entra-nel-team/)!
+				</section>
+				<section data-markdown>
+					### About Nuvola
+
+					* Created in 2013 as a Symfony application (currently on 4.3)
+					* Web application for schools
+					* Uses Amazon Web Services
+					* Uses MySQL and has a huge amount of database queries, _more than a billion_ during a regular school day
+					* In 2014 sharding was first introduced
+				</section>
+				<section data-markdown>
+					### What is sharding?
+
+					Many different views and specifications; our approach is to split data into different databases, according to domain boundaries (i.e. schools)
+
+					Our setup has a global database and multiple tenants (database shards)
+				</section>
+				<section>
+					<h3>Sharding: why and why not</h3>
+
+					<table>
+						<thead>
+							<tr>
+								<th>Pros</th>
+								<th>Cons</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>
+									<ul>
+										<li>Scalability</li>
+										<li>Security</li>
+									</ul>
+								</td>
+								<td>
+									<ul>
+										<li>Complexity</li>
+										<li>Manual data aggregation</li>
+									</ul>
+								</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
+				<section>
+					<section data-markdown>
+						### Things to keep in mind when working with a sharded database
+					</section>
+					<section data-markdown>
+						* Be aware of where data is supposed to live: some might be stored in a shard, some in the global database, some in both
+						* Even when working locally, you need to take sharding into account in your workflow: your local database will work using shards, too
+					</section>
+				</section>
+				<section>
+					<section data-markdown>
+						### Sharding: implementation with Doctrine
+
+						Two main interfaces to implement: `Doctrine\DBAL\Sharding\ShardManager` and `Doctrine\DBAL\Sharding\ShardChoser\ShardChoser`
+
+						[Documentation on Doctrine's website](https://www.doctrine-project.org/projects/doctrine-dbal/en/2.9/reference/sharding.html)
+					</section>
+					<section data-markdown>
+						#### ShardManager
+
+						Works with the connection class in order to select the right shard. Contains two types of methods: for handling shard selection (`selectGlobal`, `selectShard`, `getCurrentDistributionValue`, `getShards`) and for performing queries across all shards (`queryAll`)
+					</section>
+					<section data-markdown>
+						#### ShardChoser
+
+						Provides a single `pickShard` method, it is used for abstracting the logic of converting a "distribution value" to a shard identifier
+					</section>
+					<section data-markdown>
+						#### DBAL Configuration
+
+						```yaml
+						doctrine:
+						  dbal:
+						    connections:
+						      default:
+						        shard_choser_service: nuvola.app.sharding.shard_choser
+						        shard_manager_class: Nuvola\AppBundle\Sharding\ShardManager
+								wrapper_class: Doctrine\DBAL\Sharding\PoolingShardConnection
+						        # ...
+						```
+					</section>
+				</section>
+				<section data-markdown>
+					### More about sharding
+
+					* [Symfony and multi tenant apps: Nuvola](https://labs.madisoft.it/symfony-and-multi-tenant-apps-nuvola/)
+					* [Symfony and multi tenant apps: sharding](https://labs.madisoft.it/symfony-and-multi-tenant-apps-sharding/)
+					* [Doctrine sharding](https://labs.madisoft.it/doctrine-sharding/)
+					* SymfonyDay 2016 talk [video](https://vimeo.com/196399354) / [slides](https://www.slideshare.net/matteomoro8/scaling-symfony-apps)
+				</section>
+				<section>
+					<section data-markdown>
+						## Optimizing our setup
+					</section>
+					<section>
+						<ul>
+							<li class="fragment">Built to handle peak usage</li>
+							<li class="fragment">Usage varies widly: extreme peaks during school hours (8AM to 3PM) and certain periods (end of school year), but low to no use during summer and night time</li>
+							<li class="fragment">The setup was rigid: we could not scale it down gently to save resources</li>
+							<li class="fragment">We were spending a ton of money for resources we did not use</li>
+						</ul>
+					</section>
+				</section>
+				<section>
+					<section data-markdown>
+						### Possible solutions
+					</section>
+					<section data-markdown>
+						* Moving [from RDS GP2 to RDS IOPS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html): still not enough for our needs
+						* Database clustering: not cost effective and possibly lack of support
+						* Some proxy to handle read/write splitting: complex to set up and maintain
+						* Manually optimize certain areas of the application: inefficient and prone to error
+					</section>
+					<section data-markdown>
+						We eventually decided to switch to Amazon Aurora and use its master-slave functionality
+					</section>
+				</section>
+				<section data-markdown>
+					### What do we mean with "master-slave"?
+
+					_Master-slave replication enables data from one database server (the master) to be replicated to one or more other database servers (the slaves). The master logs the updates, which then ripple through to the slaves._
+
+					[MariaDB.com](https://mariadb.com/resources/blog/database-master-slave-replication-in-the-cloud/)
+				</section>
+				<section data-markdown>
+					### Master slave and sharding at the same time?
+
+					* Doctrine natively supports either-or
+					* We had to DIY a few things to make it work
+				</section>
+				<section>
+					<section data-markdown>
+						### Some implementation gotchas
+					</section>
+					<section data-markdown>
+						#### You have to extend the base MasterSlaveConnection class
+
+						```php
+						class Doctrine\Migrations\Configuration\Configuration
+						{
+						    public function connect() : bool
+						    {
+						        if ($this->connection instanceof MasterSlaveConnection) {
+						            return $this->connection->connect('master');
+						        }
+
+   						        return $this->connection->connect();
+						    }
+						}
+						```
+					</section>
+					<section data-markdown>
+						#### Getting creative for specifying multiple hosts
+
+						No way of changing the configuration format with a single host; as a workaround, we provide master/slave addresses separated with a colon
+
+						```yaml
+						doctrine:
+						  dbal:
+						    connections:
+						      default:
+						        host: "192.168.0.10:192.168.0.11"
+						```
+					</section>
+					<section data-markdown>
+						#### SchemaTool does something unexpected
+
+						We created a patch for `SchemaTool` which fixes the use of `Connection::executeQuery` to `Connection::executeUpdate` in writing contexts
+					</section>
+				</section>
+				<section>
+					<section data-markdown>
+						### Enter a custom connection class
+
+						* `MasterSlavePoolingShardConnection` extends `MasterSlaveConnection`
+						* A mix of `MasterSlaveConnection` and `PoolingShardConnection`
+					</section>
+					<section data-markdown>
+						Works by overriding methods where `MasterSlaveConnection` would access `$this->connections['master/slave']` and adding an extra layer, turning it into `$this->activeConnections[$this->shardId]['master/slave']`.
+					</section>
+					<section data-markdown>
+						#### DBAL Configuration
+
+						```yaml
+						doctrine:
+						  dbal:
+						    connections:
+						      default:
+						        wrapper_class: Nuvola\AppBundle\Sharding\MasterSlavePoolingShardConnection
+						        #...
+						```
+					</section>
+				</section>
+				<section>
+					<section data-markdown>
+						## Deployment
+					</section>
+					<section data-markdown>
+						### Step 1
+
+						#### Problem
+
+						We should never write to a slave
+
+						#### Solution
+
+						We set up a special version used by our help desk with extra logging features enabled, and we carefully monitored those logs
+					</section>
+					<section data-markdown>
+						### Step 2
+
+						#### Problem
+
+						The base scenario (master only) works
+
+						#### Solution
+
+						We deployed the code with no slaves enabled, with just one host configured
+					</section>
+					<section data-markdown>
+						### Step 3
+
+						#### Problem
+
+						We test the migration to Aurora
+
+						#### Solution
+
+						We have some demo environments for our help desk to use (for testing features and reproducing issues), so we migrated those
+					</section>
+					<section data-markdown>
+						### Step 4
+
+						#### Problem
+
+						We move all our data
+
+						#### Solution
+
+						We slowly batch migrate data, about 50 shards at a time
+					</section>
+					<section data-markdown>
+						### Wait for issues to pop up
+					</section>
+				</section>
+				<section data-markdown>
+					### The basic issue: replication lag
+
+					* You change something, data is written to master, but on a following request the slave is still not updated
+					* Amazon says the delay should stay below 100 milliseconds
+					* Waypoint solution implemented by [Booking](https://www.slideshare.net/JeanFranoisGagn/how-bookingcom-avoids-and-deals-with-replication-lag): interesting but too complex for our needs
+				</section>
+				<section>
+					<section data-markdown>
+						### Problem
+
+						Users will make a change, then they are forwarded to another page which will display stale data
+					</section>
+					<section data-markdown>
+						### Solution: a Symfony event listener
+					</section>
+					<section data-markdown>
+						* Basic idea: if last write was less than 2 seconds ago, force current request to use master
+						* On **request**, checks whether the last write happened less than 2 seconds ago; if so, force connection pool to use master
+						* On **response**, checks whether the current connection was using master (which means some data was written); if so, save current time as last write event
+					</section>
+					<section data-markdown>
+						* Not a perfect solution, but extemely pragmatic
+						* Theoretical risk of being stuck to master indefinitely
+						* Works using user sessions, cross-user stale data is not a real concern
+					</section>
+				</section>
+				<section>
+					<section data-markdown>
+						### Problem
+
+						Spikes in failure rates for email and SMS notification delivery
+					</section>
+					<section>
+						<ul>
+							<li class="fragment">We save a notification (email, SMS) row to database, and dispatch a message to the message queue</li>
+							<li class="fragment">Sometimes the message queue is too fast and consumer looks for a database row which does not exist yet</li>
+							<li class="fragment">The problem was already there, but failure rate was so low that we never really noticed</li>
+						</ul>
+					</section>
+					<section data-markdown>
+						### Possible solutions
+
+						Either add a slight delay to the queue consumer or implement some sort of exponential backoff logic
+					</section>
+				</section>
+				<section data-markdown>
+					### Are we happy with this setup?
+
+					* Yes! It saves us quite some money in billing
+					* Some things are not by the book, but they work for our use case and that's what matters to us
+				</section>
+				<section>
+					<section data-markdown>
+						### What did we achieve?
+					</section>
+					<section data-markdown>
+						#### We use about 50% less nodes
+
+						Every node holds about twice as many shards. We could pack even more shards in a single node, but we choose not to do it
+					</section>
+					<section data-markdown>
+						#### Replication lag is low and we can easily work around it
+
+						Usually stays around 20ms
+					</section>
+					<section data-markdown>
+						#### Very reduced load on master databases
+
+						Even with our permissive setup, about 75% of queries go to slaves, without any sort of optimization in the application
+					</section>
+					<section data-markdown>
+						#### Our code does not depend on AWS
+
+						The infrastructure is built using Aurora, but the application configuration could be easily transferred elsewhere
+					</section>
+				</section>
+				<section data-markdown>
+					## Thanks!
+
+					Please rate this talk: [https://joind.in/talk/056f3](https://joind.in/talk/056f3)
+
+					Take a look at our openings: [https://labs.madisoft.it/entra-nel-team/](https://labs.madisoft.it/entra-nel-team/)
+
+					Find me on [Twitter](https://twitter.com/davide_b88) and [Github](https://github.com/dborsatto)
+				</section>
+			</div>
+		</div>
+
+		<script src="js/reveal.js"></script>
+
+		<script>
+			// More info about config & dependencies:
+			// - https://github.com/hakimel/reveal.js#configuration
+			// - https://github.com/hakimel/reveal.js#dependencies
+			Reveal.initialize({
+				dependencies: [
+					{ src: 'plugin/markdown/marked.js' },
+					{ src: 'plugin/markdown/markdown.js' },
+					{ src: 'plugin/notes/notes.js', async: true },
+					{ src: 'plugin/highlight/highlight.js', async: true }
+				]
+			});
+		</script>
+	</body>
+</html>
